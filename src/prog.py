@@ -95,33 +95,45 @@ class ThreadStack:
         self._max_stack_size = 5
         if not stack_size or stack_size > self._max_stack_size:
             stack_size = self._max_stack_size
-        self.num_threads = 0  # keep count of active threads
-        self.threads = []
-        # a queue of free thread slots
-        self.free_locks = [i for i in range(stack_size)]
-        self.locks = [None for i in range(stack_size)]  # reusing these locks
-        self.taken_locks = [None for i in range(stack_size)]
+
+        self.paused = True # don't start any additional threads if paused
+
+        self.threads = [] # threads in queue not yet run
+        self.free_locks = [i for i in range(stack_size)] # a queue of free thread locks
+        self.locks = [ThreadObject.new_lock() for i in range(stack_size)]  # reusing these locks
 
     def add_thread(self, t_obj):
         self.threads.append(t_obj)  # store the thread
-        self._start_thread_on_slot() # try to start it
+        return self
 
-    def _start_thread_on_slot(self):
+    def start_all(self):
+        self.paused = False
+        for i in range(len(self.free_locks)):
+            # start a thread for each free slot
+            self._start_thread_on_lock()
+
+    def pause_all(self):
+        self.paused = True
+
+    
+
+    def _start_thread_on_lock(self):
+        if self.paused:
+            return
         # if there exists threads not yet run
         if len(self.threads) != 0:
             # if there is a free lock
             if len(self.free_locks) != 0:
                 # take the thread out to start
                 thread_to_run = self.threads.pop()
-                # set the second callback, give it the thread's id, and the callback
-                thread_to_run.set_second_callback(len(self.threads), self._thread_exits)
-                # take the free lock out
-                free_lock_index = self.free_locks.pop()
-                # remember who has which lock
-                self.taken_locks[len(self.threads)] = free_lock_index
-                thread_to_run.set_lock(self.locks[free_lock_index])
-
+                # take out a free lock
+                free_lock_num = self.free_locks.pop()
+                # set the exit verification, give it the lock's number to return, the actual lock, and the callback fcn
+                thread_to_run.set_exit_verify(free_lock_num, self.locks[free_lock_num], self._thread_exits)
                 thread_to_run.start() # finally start the thread
+            else:
+                # this shouldn't happen. _start_thread_on_lock is only called when a free lock is available
+                print("Tried to start a thread when no locks were available!")
         else:
             # no more threads to run
             print("No more threads to run.")
@@ -129,12 +141,10 @@ class ThreadStack:
                 
             
 
-    def _thread_exits(self, which):
+    def _thread_exits(self, lock_num):
         # perform the callback
-        returned_lock_index = self.taken_locks[which] # get the lock from the returned thread
-        self.taken_locks[which] = None # lock was returned so that thread has no lock
-        self.free_locks.append(returned_lock_index)  # add to the free slots queue
-        self._start_thread_on_slot() # try to start a new thread
+        self.free_locks.append(lock_num)  # place the returned lock back in rotation
+        self._start_thread_on_lock() # try to start a new thread
 
 
 class ThreadObject:
@@ -142,34 +152,28 @@ class ThreadObject:
         self.t_func = t_func
         self.tuple_args = tuple_args
         self.callback = callback
-        self.lock = lock
 
-        self.set_second_callback = None
+        self.lock = lock
+        self.verify_callback = None
         self.lock_id = None  # set by second callback
 
-        if not self.lock:
-            self.lock = ThreadObject.new_lock()
 
-
-    def second_callback(self, lock_id, callback):
+    def set_exit_verify(self, lock_id, lock, callback):
         if not self.is_running():
-            self.set_second_callback = callback
+            self.verify_callback = callback
             self.lock_id = lock_id
+            self.lock = lock
             return lock_id
         else:
-            return None
+            raise Exception("Could not set exit verify because thread already running.")
         
-    def set_lock(self, lock):
-        if not self.is_running():
-            self.lock = lock
-            return lock
-        else:
-            return None
 
     def start(self):
         self._start_thread()
 
     def _start_thread(self):
+        if not self.lock:
+            self.lock = ThreadObject.new_lock()
         thread.start_new_thread(
             self._thread_helper, (self.t_func, self.tuple_args, self.callback, self.lock))
 
@@ -178,11 +182,14 @@ class ThreadObject:
         res = t_func(*tuple_args)  # call the threading function
         callback(res)  # call the callback function
         lock.release() # release the lock first
-        if self.set_second_callback: # if there is a second callback function set, call it
-            self.set_second_callback(self.lock_id)
+        if self.exit_verify: # call the exit verification callback if exists
+            self.verify_callback(self.lock_id)
 
     def is_running(self):
-        return self.lock.locked()
+        if not self.lock:
+            return False
+        else:
+            return self.lock.locked()
 
     @staticmethod
     def new_lock():
