@@ -46,66 +46,6 @@ def get_ip():
     return sta_if.ifconfig()[0]
 
 
-def setup_handshake_server():
-    '''
-    Create a 'server' for the actual server to ping and connect to.
-    The result of this function will give the correct server ip.
-    '''
-    global config
-   # listen for the registration request from server
-    addr = socket.getaddrinfo('0.0.0.0', SERVER_PORT)[0][-1]
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(addr)
-    s.listen(1)
-    print('listening on', addr)
-    sent_ok = False
-    try:
-        while True:
-            # try to accept a client
-            cl, addr = s.accept()
-            while True:
-                # client accepted, listen to client
-                msg = cl.recv(1024)
-                if len(msg) <= 0:
-                    print("looking for a new client...")
-                    break
-                msg = msg.decode('utf-8').split(' ').strip()
-
-                if msg[0] == "HANDSHAKE":
-                    # found server
-                    print("Connection from " + str(cl) + ", " + str(addr) + "!")
-                    cl.send(bytes('200 OK', 'utf-8'))
-                    print("sent ok, listening for response")
-                    sent_ok = True
-                elif (msg.decode('utf-8') == "200 OK" and sent_ok):
-                    # server acknowledged
-                    cl.close()
-                    s.close()
-                    print(
-                        "Found the new server ip via handshake! It is: " + addr[0])
-                    config['server_ip'] = str(addr[0])
-                    is_registered = True
-                    led.on()
-                    time.sleep(1)
-                    led.off()
-                    save_config()
-                    print("Registered to the server successfully!")
-                    return True
-                elif (msg.decode('utf-8' == "400 BAD")):
-                    print("Looking for new connection")
-                    cl.close()
-                    break
-                else:
-                    print("got garbage, looking for new client")
-                    cl.close()
-                    break
-
-    except Exception as e:
-        print("exception here: " + str(e))
-        s.close()
-        raise
-
-
 def setup_client():
     try:
         addr = socket.getaddrinfo(config['server_ip'], 4000)[0][-1]
@@ -133,13 +73,7 @@ def setup_client():
         print(str(e))
         print(
             "Got an error while connecting with that ip. Setting up to listen for server...")
-        if not setup_handshake_server():
-            print("something went wrong while listening for the server. Exiting")
-            sys.exit()
-        else:
-            print("found the new working ip, trying to connect again.")
-            setup_comms_client()
-
+        # create threads to begin pinging 
 
 # main code
 def start():
