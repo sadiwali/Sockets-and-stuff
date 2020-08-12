@@ -1,71 +1,22 @@
+from machine import Pin
 try:
     import ujson as json
-    import utime
-    import network
+    import urequests as requests
+    import utime as time
     import usocket as socket
 except:
-    import json as json
+    import json
+    import requests
     import time
     import socket
-import sys
+
+import network
 import _thread as thread
+import sys
 
-
-class Constants:
-    LOW = 0
-    MED = 1
-    CRIT = 3
-
-
-class ConfigHandler:
-
-    ''' Handle a storage config file with the ability to read, and save instantly to storage. '''
-
-    _config_name = "wifi_config.json"
-    _config = {}
-
-    @staticmethod
-    def set_config_name(name):
-        ConfigHandler._config_name = name
-
-    @staticmethod
-    def get_val(key):
-        if key in ConfigHandler._config:
-            return ConfigHandler._config[key]
-        else:
-            return None
-
-    @staticmethod
-    def set_val(key, value):
-        ConfigHandler._config[key] = value
-        ConfigHandler._save()
-
-    @staticmethod
-    def get_keys():
-        return ConfigHandler._config.keys()
-
-    @staticmethod
-    def _save():
-        try:
-            print("writing config file...")
-            with open(ConfigHandler._config_name, 'w') as f:
-                json.dump(ConfigHandler._config, f)
-            print("wrote config to file.")
-        except:
-            print("Could not save config")
-
-    @staticmethod
-    def load():
-        data = {}
-        print("Trying to open " + ConfigHandler._config_name)
-        try:
-            with open(ConfigHandler._config_name, 'r') as f:
-                data = json.load(f)
-            print("opened config " + str(data))
-            ConfigHandler._config = data
-        except Exception as e:
-            raise
-            #ConfigHandler._config = ErrorHandler.fix_error(e, CRIT)
+LOW = 0
+MED = 1
+CRIT = 3
 
 
 class ErrorHandler(object):
@@ -79,17 +30,17 @@ class ErrorHandler(object):
               "> at attempt #" + str(_attempt) + "/" + str(num_attempts))
 
         # coming here means error was not fixed and returned earlier
-        if severity == Constants.LOW:
+        if severity == LOW:
             # continue if unable to fix
             print("Can't fix error, passing errorreturn")
             return errorreturn
-        elif severity == Constants.MED and _attempt <= num_attempts:
+        elif severity == MED and _attempt <= num_attempts:
             # try to fix again after waiting a bit
             print("Waiting for " + str(waittime +
                                        " seconds before trying again..."))
             time.sleep(waittime)
             return fix_error(e, severity, errorreturn, num_attempts, _attempt + 1, waittime)
-        elif severity == Constants.CRIT:
+        elif severity == CRIT:
             # if can't fix, then exit
             print("Could not fix the error, attempted " +
                   str(_attempt + " times, severity: " + str(severity)))
@@ -97,6 +48,46 @@ class ErrorHandler(object):
         else:
             print("Could not fix error after attempt " + str(_attempt))
             return errorreturn
+
+
+class ConfigHandler:
+    ''' Handle a storage config file with the ability to read, and save instantly to storage. '''
+
+    def __init__(self, CONFIG_NAME):
+        self._config_name = CONFIG_NAME
+        self._config = self._load_config(CONFIG_NAME)
+
+    def get_val(self, key):
+        if key in self.config:
+            return self.config[key]
+        else:
+            return None
+
+    def set_val(self, key, value):
+        self._config[key] = value
+        self._save_config
+
+    def get_keys(self):
+        return self._config.keys()
+
+    def _save_config(self):
+        try:
+            print("writing config file...")
+            with open(self._config_name, 'w') as f:
+                json.dump(self._config, f)
+            print("wrote config to file.")
+        except:
+            print("Could not save config")
+
+    def _load_config(self):
+        data = {}
+        try:
+            with open(self._config_name, 'r') as f:
+                data = json.load(f)
+            print("opened config " + str(data))
+            return data
+        except Exception as e:
+            return ErrorHandler.fix_error(e, CRIT)
 
 
 class ThreadStack:
@@ -193,36 +184,6 @@ class ThreadStack:
             self._start_thread_on_lock()
 
 
-class NetworkHandler:
-
-    sta_if = None
-
-    @staticmethod
-    def connect():
-        NetworkHandler.sta_if = network.WLAN(network.STA_IF)
-        if not NetworkHandler.sta_if.isconnected():
-            print("connecting to wifi...")
-            NetworkHandler.sta_if.active(True)
-            NetworkHandler.sta_if.connect(ConfigHandler.get_val(
-                'ssid'), ConfigHandler.get_val('password'))
-            while not NetworkHandler.sta_if.isconnected():
-                pass
-            print("Wifi connected for 1st time.")
-        else:
-            print("Wifi connected using saved state.")
-
-    @staticmethod
-    def get_ip():
-        return NetworkHandler.sta_if.ifconfig()[0]
-
-    @staticmethod
-    def is_connected():
-        if not NetworkHandler.sta_if:
-            return False
-        else:
-            return NetworkHandler.sta_if.isconnected()
-
-
 class ThreadObject:
     def __init__(self, t_func, t_args, callback, lock=None):
         ''' This is a thread but with the ability to be given a callback function, and another
@@ -285,12 +246,11 @@ class ThreadObject:
             t_args (tuple): Arguments for the threading function.
             callback (function): The callback function.
             lock (threading lock): The lock to use.
-
+        
         '''
         lock.acquire()
         res = t_func(*t_args)  # call the threading function
-        if self.callback:
-            callback(res)  # call the callback function
+        callback(res)  # call the callback function
         lock.release()  # release the lock first
         if self.release_lock:  # call the exit verification callback if exists
             self.release_lock(self.lock_id)
@@ -301,7 +261,7 @@ class ThreadObject:
         If the lock exists, it being locked means thread is running.
 
         Returns:
-            bool: True if running, False otherwise.z
+            bool: True if running, False otherwise.
 
         '''
         if not self.lock:
@@ -315,57 +275,12 @@ class ThreadObject:
 
         Returns:
             threading lock: a new lock
-
+        
         '''
         return thread.allocate_lock()
+        return thread.allocate_lock()
 
-
-class ConnectionHandler:
-    server_ip = None
-    server_port = 4000
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
-    @staticmethod
-    def send_str(msg, addr):
-        try:
-            print("Trying to send " + msg + " to " + str(addr))
-            bytes_sent = ConnectionHandler.s.sendto(msg.encode(), addr)
-            print("Sent msg'" + msg + "' (" + str(bytes_sent) + ") bytes")
-
-        except Exception as e:
-            print(str(e))
-            print("Could not connect to socket with address " + str(addr))
-
-    @staticmethod
-    def get_addr(ip, port):
-        return socket.getaddrinfo(ip, port)[0][-1]
-
-    @staticmethod
-    def get_server_addr():
-        return (ConnectionHandler.server_ip, ConnectionHandler.server_port)
-
-    @staticmethod
-    def find_server_ip():
-        ip = NetworkHandler.get_ip()
-        for i in range(10, 25):
-            ip_to_try = ip[0:ip.rfind('.')+1]+str(i)
-            if ip_to_try == ip:
-                continue
-            ConnectionHandler.send_str("HANDSHAKE", ConnectionHandler.get_addr(
-                ip_to_try, ConnectionHandler.server_port))
-        while True:
-            data, sender_addr = ConnectionHandler.s.recvfrom(1024)
-            data = data.decode()
-            print(data + "\n")
-            if data == "200 OK":
-                # server has been found, return ip
-                ConnectionHandler.server_ip = sender_addr[0]
-                return sender_addr
-
-    @staticmethod
-    def listen(addr, callback):
-        while True:
-            data, sender_addr = ConnectionHandler.s.recvfrom(1024)
-            if sender_addr[0] == ConnectionHandler.server_ip:
-                callback(data)
-
+# class Device:
+#     def __init__(self, id, config):
+#         self.id = id
+#         self.config = config
